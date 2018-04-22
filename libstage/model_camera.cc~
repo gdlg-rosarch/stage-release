@@ -24,7 +24,7 @@ using namespace Stg;
 //TODO make instance attempt to register an option (as customvisualizations do)
 Option ModelCamera::showCameraData( "Show Camera Data", "show_camera", "", true, NULL );
 
-static const Stg::Size DEFAULT_SIZE( 0.1, 0.07, 0.05 );
+static const Size DEFAULT_SIZE( 0.1, 0.07, 0.05 );
 static const char DEFAULT_GEOM_COLOR[] = "black";
 static const float DEFAULT_HFOV = 70;
 static const float DEFAULT_VFOV = 40;
@@ -144,20 +144,20 @@ void ModelCamera::Load( void )
 {
 	Model::Load();
 	
-	double horizFov =  DEFAULT_HFOV;
-	double vertFov = DEFAULT_VFOV;
-	wf->ReadTuple( wf_entity, "fov", 0, 2, "ff", &horizFov, &vertFov );
+	float horizFov =  wf->ReadTupleFloat( wf_entity, "fov", 0, DEFAULT_HFOV );
+	float vertFov = wf->ReadTupleFloat( wf_entity, "fov", 1, DEFAULT_VFOV );
 	_camera.setFov( horizFov, vertFov );
 	
-	double range_min = CAMERA_NEAR_CLIP;
-	double range_max = CAMERA_FAR_CLIP;
-	wf->ReadTuple( wf_entity, "range", 0, 2, "ll", &range_min, &range_max );
+	float range_min = wf->ReadTupleLength( wf_entity, "range", 0, CAMERA_NEAR_CLIP );
+	float range_max = wf->ReadTupleLength( wf_entity, "range", 1, CAMERA_FAR_CLIP );
 	_camera.setClip( range_min, range_max );
 
-	// note = these are in degrees internally
-	wf->ReadTuple( wf_entity, "pantilt", 0, 2, "ff", &_yaw_offset, &_pitch_offset );
-
-	wf->ReadTuple( wf_entity, "resolution", 0, 2, "ii", &_width, &_height );	
+	_yaw_offset = wf->ReadTupleFloat( wf_entity, "pantilt", 0, _yaw_offset );
+	_pitch_offset = wf->ReadTupleFloat( wf_entity, "pantilt", 1, _pitch_offset );
+	
+	_width = static_cast< int >( wf->ReadTupleFloat( wf_entity, "resolution", 0, _width ) );
+	_height = static_cast< int >( wf->ReadTupleFloat( wf_entity, "resolution", 1, _height ) );
+	
 }
 
 
@@ -242,100 +242,105 @@ bool ModelCamera::GetFrame( void )
 
 //TODO create lines outlining camera frustrum, then iterate over each depth measurement and create a square
 void ModelCamera::DataVisualize( Camera* cam )
-{		
-  if( _frame_data == NULL || !showCameraData )
-    return;
-  
-  float w_fov = _camera.horizFov();
-  float h_fov = _camera.vertFov();
-  
-  float start_fov = w_fov / 2.0 + 180.0; //start at right
-  float start_vert_fov = h_fov / 2.0 + 90.0; //start at top
-  
-  int w = _width;
-  int h = _height;
-  float a_space = w_fov / w; //degrees between each sample
-  float vert_a_space = h_fov / h; //degrees between each vertical sample
-  
-  //Create unit vectors representing a sphere - and cache it
-  if( _valid_vertexbuf_cache == false ) {
-    for( int j = 0; j < h; j++ ) {
-      for( int i = 0; i < w; i++ ) {
+{	
 	
-	float a = start_fov - static_cast< float >( i ) * a_space;
-	float vert_a = start_vert_fov - static_cast< float >( h - j - 1 ) * vert_a_space;
+	if( _frame_data == NULL || !showCameraData )
+		return;
 	
-	int index = i + j * w;
-	ColoredVertex* vertex = _vertexbuf_cache + index;
+	float w_fov = _camera.horizFov();
+	float h_fov = _camera.vertFov();
+
+	float start_fov = w_fov / 2.0 + 180.0; //start at right
+	float start_vert_fov = h_fov / 2.0 + 90.0; //start at top
+
+	int w = _width;
+	int h = _height;
+	float a_space = w_fov / w; //degrees between each sample
+	float vert_a_space = h_fov / h; //degrees between each vertical sample
+
+	//Create unit vectors representing a sphere - and cache it
+	if( _valid_vertexbuf_cache == false ) {
+		for( int j = 0; j < h; j++ ) {
+			for( int i = 0; i < w; i++ ) {
+				
+				float a = start_fov - static_cast< float >( i ) * a_space;
+				float vert_a = start_vert_fov - static_cast< float >( h - j - 1 ) * vert_a_space;
+				
+				int index = i + j * w;
+				ColoredVertex* vertex = _vertexbuf_cache + index;
+				
+				//calculate and cache normal unit vectors of the sphere
+				float x = -sin( dtor( vert_a ) ) * cos( dtor( a ) );
+				float y = -sin( dtor( vert_a ) ) * sin( dtor( a ) );
+				float z = -cos( dtor( vert_a ) );
+				
+				//rotate them about the pitch and yaw offsets - keeping distortion of the sphere at the extremes
+				a = dtor( - _yaw_offset );
+				vertex->x = x * cos( a ) - y * sin( a );
+				vertex->y = x * sin( a ) + y * cos( a );
+				vertex->z = z;
+				
+				x = vertex->x; y = vertex->y; z = vertex->z;
+				a = dtor( _pitch_offset );
+				vertex->x = z * sin( a ) + x * cos( a );
+				vertex->y = y;
+				vertex->z = z * cos( a ) - x * sin( a );
+			}
+		}
+		_valid_vertexbuf_cache = true;
+	}
 	
-	//calculate and cache normal unit vectors of the sphere
-	float x = -sin( dtor( vert_a ) ) * cos( dtor( a ) );
-	float y = -sin( dtor( vert_a ) ) * sin( dtor( a ) );
-	float z = -cos( dtor( vert_a ) );
+	glDisable( GL_CULL_FACE );
+	//glBegin( GL_QUADS );
 	
-	//rotate them about the pitch and yaw offsets - keeping distortion of the sphere at the extremes
-	a = dtor( - _yaw_offset );
-	vertex->x = x * cos( a ) - y * sin( a );
-	vertex->y = x * sin( a ) + y * cos( a );
-	vertex->z = z;
 	
-	x = vertex->x; y = vertex->y; z = vertex->z;
-	a = dtor( _pitch_offset );
-	vertex->x = z * sin( a ) + x * cos( a );
-	vertex->y = y;
-	vertex->z = z * cos( a ) - x * sin( a );
-      }
-    }
-    _valid_vertexbuf_cache = true;
-  }
-  
-  //  glDisable( GL_CULL_FACE );
-  
-  
-  //Scale cached unit vectors with depth-buffer
-  float* depth_data = ( float* )( _frame_data );
-  for( int j = 0; j < h; j++ ) {
-    for( int i = 0; i < w; i++ ) {
-      int index = i + j * w;
-      const ColoredVertex* unit_vertex = _vertexbuf_cache + index;
-      const float length = depth_data[ index ];
-      
-      //scale unitvectors with depth-buffer
-      float sx = unit_vertex->x * length;
-      float sy = unit_vertex->y * length;
-      float sz = unit_vertex->z * length;
-      
-      //create a quad based on the current camera pixel, and normal vector
-      //the quad size is porpotial to the depth distance
-      float x, y, z;
-      x = 0; y = 0; z = length * M_PI * a_space / 360.0;
-      cross( x, y, z, unit_vertex->x, unit_vertex->y, unit_vertex->z );
-      
-      z = length * M_PI * vert_a_space / 360.0;
-      
-      GLfloat* p = _camera_quads + index * 4 * 3;
-      p[ 0 ] = sx - x; p[  1 ] = sy - y; p[  2 ] = sz - z;
-      p[ 3 ] = sx - x; p[  4 ] = sy - y; p[  5 ] = sz + z;
-      p[ 6 ] = sx + x; p[  7 ] = sy + y; p[  8 ] = sz + z;
-      p[ 9 ] = sx + x; p[ 10 ] = sy + y; p[ 11 ] = sz - z;
-      
-      //copy color for each vertex
-      //TODO using a color index would be smarter
-      const GLubyte* color = _frame_color_data + index * 4;
-      for( int i = 0; i < 4; i++ ) {
-	GLubyte* cp = _camera_colors + index * 4 * 3 + i * 3;
-	memcpy( cp, color, sizeof( GLubyte ) * 3 );
-      }
-    }
-  }
-  
-  // vertex arrays are already enabled  
-  glEnableClientState( GL_COLOR_ARRAY );
-  
-  glVertexPointer( 3, GL_FLOAT, 0, _camera_quads );
-  glColorPointer( 3, GL_UNSIGNED_BYTE, 0, _camera_colors );
-  glDrawArrays( GL_QUADS, 0, w * h * 4 );
-  
-  glDisableClientState( GL_COLOR_ARRAY );
+	//Scale cached unit vectors with depth-buffer
+	float* depth_data = ( float* )( _frame_data );
+	for( int j = 0; j < h; j++ ) {
+		for( int i = 0; i < w; i++ ) {
+			int index = i + j * w;
+			const ColoredVertex* unit_vertex = _vertexbuf_cache + index;
+			const float length = depth_data[ index ];
+			
+			//scale unitvectors with depth-buffer
+			float sx = unit_vertex->x * length;
+			float sy = unit_vertex->y * length;
+			float sz = unit_vertex->z * length;
+			
+			//create a quad based on the current camera pixel, and normal vector
+			//the quad size is porpotial to the depth distance
+			float x, y, z;
+			x = 0; y = 0; z = length * M_PI * a_space / 360.0;
+			cross( x, y, z, unit_vertex->x, unit_vertex->y, unit_vertex->z );
+			
+			z = length * M_PI * vert_a_space / 360.0;
+			
+			GLfloat* p = _camera_quads + index * 4 * 3;
+			p[ 0 ] = sx - x; p[  1 ] = sy - y; p[  2 ] = sz - z;
+			p[ 3 ] = sx - x; p[  4 ] = sy - y; p[  5 ] = sz + z;
+			p[ 6 ] = sx + x; p[  7 ] = sy + y; p[  8 ] = sz + z;
+			p[ 9 ] = sx + x; p[ 10 ] = sy + y; p[ 11 ] = sz - z;
+
+			//copy color for each vertex
+			//TODO using a color index would be smarter
+			const GLubyte* color = _frame_color_data + index * 4;
+			for( int i = 0; i < 4; i++ ) {
+			  GLubyte* cp = _camera_colors + index * 4 * 3 + i * 3;
+				memcpy( cp, color, sizeof( GLubyte ) * 3 );
+			}
+		}
+	}
+	
+
+	//glEnableClientState( GL_VERTEX_ARRAY );
+	glEnableClientState( GL_COLOR_ARRAY );
+	
+	glVertexPointer( 3, GL_FLOAT, 0, _camera_quads );
+	glColorPointer( 3, GL_UNSIGNED_BYTE, 0, _camera_colors );
+	glDrawArrays( GL_QUADS, 0, w * h * 4 );
+	
+	glDisableClientState( GL_COLOR_ARRAY );
+//	glDisableClientState( GL_VERTEX_ARRAY ); //TODO FIXME - something is using vertex arrays without properly enabling it
+
 }
 
